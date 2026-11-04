@@ -1,107 +1,122 @@
 #ifndef MOTOR_H
 #define MOTOR_H
-#define MAX_LADO 5 //maior tabuleiro
-#define VAZIA (-1) //casa sem carta
 
-static const int FATIAS[8] = {0, 1, 3, 5, 6, 5, 3, 1}; // [caixa vazia = 0] - [uma fatia (esquerda) = 1] - [metade (esquerda) = 2] - [faltando uma fatia (direito) = 3] - [pizza inteira = 4] - [faltando uma fatia (esquerdo) = 5] - [metade (direita) = 6] - [uma fatia (direita) = 7]
-static const int LADO[8] = {0, -1, -1, 1, 0, -1, 1, 1}; // lado da pizza: -1 = esquerda / 1 = direita / 0 = caixa vazia ou inteira
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-static int tamanho = 4; 
-static int tabuleiro[MAX_LADO * MAX_LADO]; //tabuleiro tamanho x tamanho
-static void novo_tabuleiro(int lado){ //casa vazia ou o tipo da carta
-    tamanho = lado;
-    for(int i = 0; i < MAX_LADO * MAX_LADO; i++){
-        tabuleiro[i] = VAZIA;
-    }
-}
+/* TODO: definir o tamanho da queda (valores ainda nao decididos) */
+#define alturaTab 10
+#define larguraTab 5
 
-static int carta_na_casa(int lin, int col){ // qual carta está na linha e coluna / vazia se a casa estiver vazia
-    if(lin < 0 || lin >= tamanho || col < 0 || col >= tamanho){
-        return VAZIA;
-    }
-    return tabuleiro[lin * tamanho + col];
-}
+#define TIPOS_CARTA 8   /* cartas de 0 a 7 */
+#define TAM_NOME    32
 
-// SEGUE PRA PARTE 2
+/* Tabela das cartas (ja existe, nao mexer):
+ * 0 caixa vazia, 1 uma fatia (esq), 2 metade (esq), 3 falta 1 (dir),
+ * 4 inteira, 5 falta 1 (esq), 6 metade (dir), 7 uma fatia (dir) */
+static const int FATIAS[TIPOS_CARTA] = {0, 1, 3, 5, 6, 5, 3, 1};
+static const int LADO[TIPOS_CARTA]   = {0, -1, -1, 1, 0, -1, 1, 1};
 
-// 28/10/26 - 10:10 AM
+/* ---------- ESTRUTURAS ---------- */
 
-static int se_completam(int a, int b){ // as cartas se completam quando formam uma pizza inteira
-    return(a == 0 && b == 4) || (a == 4 && b == 0) || (a == 2 && b == 6) || (a == 6 && b == 2)
-        || (a == 1 && b == 3) || (a == 3 && b == 1) || (a == 5 && b == 7) || (a == 7 && b == 5);
-}
+/* A peca que esta caindo. 'tipo' substitui o antigo 'pedacos'. */
+typedef struct {
+    int x;      /* coluna */
+    int y;      /* linha (cresce para baixo, como no main.c) */
+    int tipo;   /* 0 a 7 */
+} Peca;
 
-static int pontuar (int pos, int carta){ // Qtd de pontos por colocar a carta na posicao (com as regras implementadas)
-    int lin = pos / tamanho;
-    int col = pos % tamanho;
-    int pontos = 0;
+/* No da lista encadeada com as proximas pecas (fila). */
+typedef struct NoFatia {
+    int tipo;
+    struct NoFatia *prox;
+} NoFatia;
 
-    tabuleiro[pos] = carta;
+/* O estado inteiro do jogo. 'tab' e' a matriz alocada com malloc. */
+typedef struct {
+    int **tab;          /* alturaTab x larguraTab, alocada dinamicamente */
+    Peca fatiaAtual;    /* peca caindo agora */
+    NoFatia *filaFatias;/* lista com as proximas pecas */
+    int pontuacao;
+    bool gameOver;
+} EstadoJogo;
 
-    int d_lin[4] = {-1, 1, 0, 0}; // vizinhas
-    int d_col[4] = {0, 0, -1, 1};
-    for (int k = 0; k < 4; k++){
-        int v = carta_na_casa(lin + d_lin[k], col + d_col[k]);
-        if (v == VAZIA){
-            continue;
-        }
-        if (v == carta){
-            pontos += 1;
-        }
-        else if (se_completam(carta, v)){
-            pontos += 2;
-        }
-    }
+/* No da lista encadeada do placar (top scores). */
+typedef struct Recorde {
+    char nome[TAM_NOME];
+    int pontos;
+    struct Recorde *prox;
+} Recorde;
 
-    for (int sentido = 0; sentido < 2; sentido++){ //trios (0 - horizontal e 1 - vertical)
-        int passo_lin = (sentido == 1);
-        int passo_col = (sentido == 0);
-        for (int inicio = -2; inicio <= 0; inicio++){
-            int a = carta_na_casa (lin + inicio * passo_lin, col + inicio * passo_col);
-            int b = carta_na_casa (lin + (inicio + 1) * passo_lin, col + (inicio + 1) * passo_col);
-            int c = carta_na_casa (lin + (inicio + 2) * passo_lin, col + (inicio + 2) * passo_col);
-            if (a == VAZIA || b == VAZIA || c == VAZIA){
-                continue; //falta carta ou sai do tabuleiro
-            }
-            int esq = LADO[a] < 0 || LADO[b] < 0 || LADO[c] < 0;
-            int dir = LADO[a] > 0 || LADO[b] > 0 || LADO[c] > 0;
-            if (esq && dir){
-                continue; //lados diferentes nao valem
-            }
-            int fa = FATIAS[a], fb = FATIAS[b], fc = FATIAS[c];
-            if ((fa < fb && fb < fc) || (fa > fb && fb > fc)){
+/* ---------- ESTADO (alocacao dinamica) ---------- */
 
-            } 
-        }  
-    }
+/* TODO: aloca o EstadoJogo e a matriz tab (alturaTab x larguraTab) com malloc.
+ * Devolve NULL se faltar memoria. */
+EstadoJogo *estado_criar(void);
 
-    tabuleiro[pos] == VAZIA; 
-    return pontos;
-}
- 
-// segue pra parte 3
+/* TODO: libera a matriz tab, a fila filaFatias e depois a struct (free). */
+void estado_liberar(EstadoJogo *jogo);
 
-// 29/10/26 - 12:57 PM
+/* TODO: zera tab, pontuacao e gameOver; coloca a primeira peca no topo do meio;
+ * enche a fila. (chamada pelo main.c, como ja esta hoje) */
+void iniciarJogo(EstadoJogo *jogo);
 
-static int melhor_jogada(const int mao[3], int sorteio){
-    int casas = tamanho * tamanho;
-    int melhor = -1;
-    int resposta = -1;
+/* ---------- PECA E FILA (lista encadeada) ---------- */
 
-    for (int i = 0; i < 3; i++) {
-        int c = (i + sorteio) % 3;
-        for (int j = 0; j < casas; j++) {
-            int pos = (j + sorteio) % casas;
-            if (tabuleiro[pos] != VAZIA) {
-                continue;
-            }
-            int p = pontuar(pos, mao[c]);
-            if (p > melhor) {
-                melhor = p;
-                resposta = c * 100 + pos;
-            }
-        }
-    }
-    return resposta;
-}
+/* TODO: cria um no com 'tipo' e coloca no fim da fila (malloc). */
+void fila_adicionar(NoFatia **inicio, int tipo);
 
+/* TODO: tira o primeiro no da fila, devolve o tipo e libera o no (free).
+ * Se a fila estiver vazia, devolve -1 (ou sorteia: decidir). */
+int fila_remover(NoFatia **inicio);
+
+/* TODO: libera todos os nos da fila (free em cada um). */
+void fila_liberar(NoFatia *inicio);
+
+/* TODO: a peca atual passa a ser a proxima da fila (x no meio do topo, y = 0). */
+void peca_proxima(EstadoJogo *jogo);
+
+/* ---------- MOVIMENTO ---------- */
+
+/* TODO: a peca pode ir para (x + dx, y + dy)? Confere borda e casa ocupada. */
+bool pode_mover(const EstadoJogo *jogo, int dx, int dy);
+
+/* TODO: se pode_mover, move a peca atual. Usado por 'a', 'd' e 's' no main.c. */
+void mover_peca(EstadoJogo *jogo, int dx, int dy);
+
+/* TODO: a peca desce uma linha. Se nao pode mais descer, chama fixar_peca. */
+void descer_peca(EstadoJogo *jogo);
+
+/* ---------- FIXAR E PONTUAR ---------- */
+
+/* TODO: grava a peca atual em tab, calcula os pontos (pontuar_jogada),
+ * soma em pontuacao, remove o que pontuou (remover_pontuados),
+ * e chama peca_proxima. Se a nova peca nao cabe, gameOver = true. */
+void fixar_peca(EstadoJogo *jogo);
+
+/* TODO: quantos pontos vale a peca 'tipo' na casa (lin, col)? O tab nao muda.
+ *   +1 para cada vizinha igual
+ *   +3 quando as fatias da pizza inteira (6) se completam com as vizinhas
+ * Regra exata de "completar 6" ainda em definicao: ver a pergunta ao grupo. */
+int pontuar_jogada(const EstadoJogo *jogo, int lin, int col, int tipo);
+
+/* TODO: apaga as cartas que pontuaram e faz as cartas de cima descerem
+ * (gravidade). Decidir se roda em loop ate nao ter mais nada para apagar. */
+void remover_pontuados(EstadoJogo *jogo);
+
+/* ---------- PLACAR (lista encadeada + arquivo) ---------- */
+
+/* TODO: insere um recorde na lista, mantendo a lista ordenada por pontos (maior primeiro). */
+void recorde_inserir(Recorde **inicio, const char *nome, int pontos);
+
+/* TODO: le o arquivo de recordes (fopen/fscanf) e devolve a lista. NULL se o arquivo nao existir. */
+Recorde *recordes_carregar(const char *arquivo);
+
+/* TODO: grava a lista no arquivo (fopen/fprintf). Devolve 1 se deu certo, 0 se nao. */
+int recordes_salvar(const Recorde *inicio, const char *arquivo);
+
+/* TODO: libera todos os nos da lista de recordes. */
+void recordes_liberar(Recorde *inicio);
+
+#endif
