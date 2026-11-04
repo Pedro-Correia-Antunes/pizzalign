@@ -5,39 +5,35 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* TODO: definir o tamanho da queda (valores ainda nao decididos) */
-#define alturaTab 10
-#define larguraTab 5
+#define larguraTab 10     /* colunas */
+#define alturaTab  20     /* linhas (a de cima e' a linha 0) */
 
-#define TIPOS_CARTA 8   /* cartas de 0 a 7 */
+#define VAZIA       0     /* casa sem peca (o main.c ja zera assim) */
+#define PEDACOS_MAX 5     /* uma peca tem de 1 a 5 pedacos */
+#define PIZZA_INTEIRA 6   /* soma que entrega a pizza */
+#define PONTOS_PIZZA 3    /* pontos por pizza entregue */
 #define TAM_NOME    32
-
-/* Tabela das cartas (ja existe, nao mexer):
- * 0 caixa vazia, 1 uma fatia (esq), 2 metade (esq), 3 falta 1 (dir),
- * 4 inteira, 5 falta 1 (esq), 6 metade (dir), 7 uma fatia (dir) */
-static const int FATIAS[TIPOS_CARTA] = {0, 1, 3, 5, 6, 5, 3, 1};
-static const int LADO[TIPOS_CARTA]   = {0, -1, -1, 1, 0, -1, 1, 1};
 
 /* ---------- ESTRUTURAS ---------- */
 
-/* A peca que esta caindo. 'tipo' substitui o antigo 'pedacos'. */
+/* A peca que esta caindo. 'pedacos' vale de 1 a 5. */
 typedef struct {
-    int x;      /* coluna */
-    int y;      /* linha (cresce para baixo, como no main.c) */
-    int tipo;   /* 0 a 7 */
+    int x;          /* coluna */
+    int y;          /* linha (cresce para baixo, como no main.c) */
+    int pedacos;    /* 1 a 5 */
 } Peca;
 
 /* No da lista encadeada com as proximas pecas (fila). */
 typedef struct NoFatia {
-    int tipo;
+    int pedacos;
     struct NoFatia *prox;
 } NoFatia;
 
 /* O estado inteiro do jogo. 'tab' e' a matriz alocada com malloc. */
 typedef struct {
-    int **tab;          /* alturaTab x larguraTab, alocada dinamicamente */
-    Peca fatiaAtual;    /* peca caindo agora */
-    NoFatia *filaFatias;/* lista com as proximas pecas */
+    int **tab;           /* alturaTab x larguraTab; VAZIA ou 1 a 5 */
+    Peca fatiaAtual;     /* peca caindo agora */
+    NoFatia *filaFatias; /* lista com as proximas pecas */
     int pontuacao;
     bool gameOver;
 } EstadoJogo;
@@ -62,13 +58,13 @@ void estado_liberar(EstadoJogo *jogo);
  * enche a fila. (chamada pelo main.c, como ja esta hoje) */
 void iniciarJogo(EstadoJogo *jogo);
 
-/* ---------- PECA E FILA (lista encadeada) ---------- */
+/* ---------- FILA (lista encadeada) ---------- */
 
-/* TODO: cria um no com 'tipo' e coloca no fim da fila (malloc). */
-void fila_adicionar(NoFatia **inicio, int tipo);
+/* TODO: cria um no com 'pedacos' e coloca no fim da fila (malloc). */
+void fila_adicionar(NoFatia **inicio, int pedacos);
 
-/* TODO: tira o primeiro no da fila, devolve o tipo e libera o no (free).
- * Se a fila estiver vazia, devolve -1 (ou sorteia: decidir). */
+/* TODO: tira o primeiro no da fila, devolve o valor e libera o no (free).
+ * Se a fila estiver vazia, devolve 0 (ou sorteia: decidir). */
 int fila_remover(NoFatia **inicio);
 
 /* TODO: libera todos os nos da fila (free em cada um). */
@@ -88,22 +84,26 @@ void mover_peca(EstadoJogo *jogo, int dx, int dy);
 /* TODO: a peca desce uma linha. Se nao pode mais descer, chama fixar_peca. */
 void descer_peca(EstadoJogo *jogo);
 
-/* ---------- FIXAR E PONTUAR ---------- */
+/* ---------- FIXAR, FUNDIR E ENTREGAR ---------- */
 
-/* TODO: grava a peca atual em tab, calcula os pontos (pontuar_jogada),
- * soma em pontuacao, remove o que pontuou (remover_pontuados),
- * e chama peca_proxima. Se a nova peca nao cabe, gameOver = true. */
+/* TODO: fixa a peca atual na matriz. Se cair sobre outra peca, tenta fundir:
+ *   soma <= 6 -> funde (chama fundir_peca)
+ *   soma  > 6 -> trava e empilha (a peca fica na casa de cima)
+ * Depois chama entregar_pizzas (se houver soma 6), aplicar_gravidade,
+ * peca_proxima. Se a nova peca nao cabe no topo, gameOver = true. */
 void fixar_peca(EstadoJogo *jogo);
 
-/* TODO: quantos pontos vale a peca 'tipo' na casa (lin, col)? O tab nao muda.
- *   +1 para cada vizinha igual
- *   +3 quando as fatias da pizza inteira (6) se completam com as vizinhas
- * Regra exata de "completar 6" ainda em definicao: ver a pergunta ao grupo. */
-int pontuar_jogada(const EstadoJogo *jogo, int lin, int col, int tipo);
+/* TODO: funde 'pedacos' na casa (lin, col): a casa passa a ter a soma.
+ * Devolve a soma. */
+int fundir_peca(EstadoJogo *jogo, int lin, int col, int pedacos);
 
-/* TODO: apaga as cartas que pontuaram e faz as cartas de cima descerem
- * (gravidade). Decidir se roda em loop ate nao ter mais nada para apagar. */
-void remover_pontuados(EstadoJogo *jogo);
+/* TODO: procura casas com soma 6 (pizza inteira). Para cada uma: apaga a casa,
+ * soma PONTOS_PIZZA em pontuacao. Devolve quantas pizzas foram entregues. */
+int entregar_pizzas(EstadoJogo *jogo);
+
+/* TODO: gravidade continua (Tetris). Cada peca solta cai ate bater em outra
+ * peca ou no fundo. Pode ser preciso repetir ate nao ter mais o que cair. */
+void aplicar_gravidade(EstadoJogo *jogo);
 
 /* ---------- PLACAR (lista encadeada + arquivo) ---------- */
 
