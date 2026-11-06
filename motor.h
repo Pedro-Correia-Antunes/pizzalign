@@ -26,7 +26,7 @@ typedef struct {
 /* No da lista encadeada com as proximas pecas (fila). */
 typedef struct NoFatia {
     int pedacos;
-    struct NoFatia *prox;
+    struct NoFatia *proximo;
 } NoFatia;
 
 /* O estado inteiro do jogo. 'tab' e' a matriz alocada com malloc. */
