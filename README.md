@@ -14,8 +14,6 @@
   <img src="docs/partida.png" alt="Partida em andamento" height="420">
 </p>
 
-> Projeto da disciplina de **Programação Imperativa e Funcional (PIF)** do CESAR School. Escrito em **C**, com interface gráfica em janela feita com a biblioteca **raylib**. Aplica estruturas, ponteiros, matrizes, alocação dinâmica, listas encadeadas e manipulação de arquivos.
-
 ## Sumário
 
 - [Jogar agora (Windows)](#jogar-agora-windows)
