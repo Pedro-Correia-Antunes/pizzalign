@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-gerar_arte.py - desenha a arte do Pizzalign (logo, mascote, cartas, tomate, icone da janela).
+gerar_arte.py - desenha a arte do Pizzalign (logo, mascote, cartas, tomate, icone da janela)
+e prepara a foto de fundo (ferramentas/fundo_original.png).
 
 Tudo no mesmo traco: contorno grosso de "canetao", cores chapadas e a paleta da bandeira italiana,
 para combinar com o chapeu de chef da logo.
@@ -10,6 +11,7 @@ Uso (de dentro da pasta do jogo):
 Precisa de Pillow e numpy (pip install pillow numpy). Depois rode gerar_embutidos.py.
 """
 import math
+import os
 import sys
 
 import numpy as np
@@ -235,6 +237,18 @@ def gerar_tomate():
 
 
 # ================================================================
+#  FUNDO: a foto da rua, e uma copia pequena e borrada dela
+# ================================================================
+def gerar_fundo(saida):
+    """fundo.png e a foto como ela e. fundo_borrado.png e uma miniatura desfocada: em tela cheia o jogo
+    estica essa miniatura por tras, para as sobras dos lados nao ficarem pretas."""
+    foto = Image.open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fundo_original.png")).convert("RGB")
+    foto.save(f"{saida}/fundo.png", optimize=True)
+    mini = foto.resize((foto.width // 6, foto.height // 6), Image.LANCZOS).filter(ImageFilter.GaussianBlur(3))
+    mini.save(f"{saida}/fundo_borrado.png", optimize=True)
+
+
+# ================================================================
 def main():
     if len(sys.argv) != 4:
         print(__doc__)
@@ -266,6 +280,7 @@ def main():
             img.transpose(Image.FLIP_LEFT_RIGHT).save(f"{saida}/{nome.replace('_dir', '_esq')}.png", optimize=True)
     gerar_caixa().save(f"{saida}/carta_caixa.png", optimize=True)
     gerar_tomate().save(f"{saida}/tomate.png", optimize=True)
+    gerar_fundo(saida)
     print("arte gerada em", saida)
 
 

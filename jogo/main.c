@@ -12,7 +12,8 @@
  * Dois jogadores se revezam, uma carta cada vez:
  *   Jogador 1 (comeca): A / D = mover | S = descer mais rapido
  *   Jogador 2         : seta esquerda / direita = mover | seta para baixo = descer
- *   P = pausa | M = menu | Q = sair
+ *   P = pausa | M = menu | Q = sair | N = som ligado/desligado | F11 = tela cheia
+ *   Tudo que aparece como botao ou tecla na tela tambem pode ser clicado com o mouse.
  *
  * Regras (estao no motor.c): a carta pousa e empilha. Ao pousar, se a vizinha de baixo, da esquerda
  * ou da direita (de qualquer jogador) somar 6 com ela, vale 3 pontos; se for igual, vale 1 ponto.
@@ -22,7 +23,12 @@
  *   - contorno grosso de tinta + cor chapada em paineis, botoes, teclas e cartas;
  *   - paleta da bandeira italiana: verde = Jogador 1, vermelho = Jogador 2, papel claro no meio;
  *   - uma fonte so, a Caveat (negrito nos titulos e numeros, seminegrito no texto corrido);
- *   - fundo de toalha xadrez de cantina, desenhado em codigo.
+ *   - fundo: a foto da rua italiana, em todas as telas (em tela cheia, uma copia borrada cobre as sobras).
+ *
+ *
+ * SOM: efeitos curtos (botoes, mover, pousar, pontuar, subir de nivel, fim) e uma musica ambiente em loop.
+ * DIFICULDADE: Facil, Normal ou Dificil, escolhida no menu. Muda a velocidade da queda e, a cada nivel,
+ *   a chance de vir tomate (tabela DIFICULDADES).
  *
  * Mapa do arquivo: 1) recursos  2) texto  3) pecas da interface  4) telas  5) logica da partida  6) main
  */
@@ -70,30 +76,62 @@
 #define VERDE     COR(71, 137, 101)
 #define VERMELHO  COR(176, 42, 4)
 #define QUEIJO    COR(246, 196, 69)     /* destaque: de quem e a vez, pontos ganhos */
-#define TOALHA    COR(247, 236, 216)
 
 static const Color COR_J[2] = {{71, 137, 101, 255}, {176, 42, 4, 255}};     /* Jogador 1 = verde, Jogador 2 = vermelho */
 
 typedef enum { TELA_MENU, TELA_COMO, TELA_JOGO } Tela;
 typedef struct { float x, y, vida; int valor; } Fantasma;          /* carta que acabou de pontuar, sumindo */
-typedef struct { int pontos; bool pizza; float x, y, vida; } Popup; /* "+3" / "+1" subindo */
-typedef struct { const char *tecla1, *tecla2, *texto; } Dica;      /* uma dica do rodape: tecla(s) + o que faz */
+typedef struct { int pontos; bool pizza; float x, y, vida, ox, oy; } Popup;   /* "+3" / "+1" subindo; (ox, oy) = onde nasceu */
+typedef struct { float x, y, vx, vy, vida, tam; Color cor; } Migalha;        /* farelo que voa quando duas cartas se fundem */
+typedef struct { const char *tecla1, *tecla2, *texto; int tecla; } Dica;     /* dica do rodape: tecla(s) + o que faz; "tecla" e o que o clique aperta (0 = so informa) */
+#define MAX_MIGALHAS 120
 typedef struct {
     float tempo, dispX, dispY, tEsq, tDir;
     float inclina;           /* o chapeu do topo se inclina para o lado de quem joga */
     Fantasma fantasmas[2 * MAX_PARES];
     Popup popups[MAX_PARES];
+    Migalha migalhas[MAX_MIGALHAS];
     char nome[TAM_NOME_DIGITADO + 1];
     int tamNome, vez;        /* vez: 0 = jogador 1, 1 = jogador 2 */
     int pontos[2];           /* pontos de cada jogador (o motor guarda so o total) */
     bool salvo, pausado;
 } Partida;
 
+/* ---------- dificuldade (escolhida no menu) ----------
+ * O nivel sobe a cada 10 pontos. A chance de tomate comeca em "tomate_inicio" no nivel "tomate_nivel"
+ * e cresce "tomate_por_nivel" a cada nivel, ate "tomate_max". */
+typedef struct {
+    const char *nome;
+    float queda;             /* segundos por linha no comeco da partida */
+    int   acelera_apos;      /* pontos a partir dos quais a queda comeca a acelerar */
+    float acelera;           /* segundos a menos por ponto depois disso */
+    float queda_min;         /* a queda nunca fica mais rapida que isto */
+    int   tomate_nivel, tomate_inicio, tomate_por_nivel, tomate_max;   /* chances em % */
+} Dificuldade;
+static const Dificuldade DIFICULDADES[3] = {
+    {"Fácil",   0.68f, 40, 0.003f, 0.26f, 3, 3, 1, 10},
+    {"Normal",  0.55f, 30, 0.004f, 0.18f, 2, 4, 2, 20},
+    {"Difícil", 0.42f, 10, 0.005f, 0.13f, 1, 6, 4, 36},
+};
+static const Color COR_DIF[3] = {{71, 137, 101, 255}, {214, 150, 38, 255}, {176, 42, 4, 255}};   /* verde, amarelo queimado, vermelho */
+static int dificuldade = 1;      /* 0 = Facil, 1 = Normal, 2 = Dificil */
+
+/* ---------- mouse, janela e som (valem para todas as telas) ---------- */
+static Vector2 mouse;            /* posicao do mouse nas medidas do jogo */
+static Rectangle visivel;        /* pedaco do jogo que aparece na janela (em tela cheia sobra espaco dos lados) */
+static bool sobre_clicavel;      /* o mouse esta em cima de algo clicavel neste quadro? (vira a maozinha) */
+static int  tecla_clicada;       /* tecla de um botao clicado neste quadro... */
+static int  tecla_virtual;       /* ...que vale como tecla apertada no quadro seguinte */
+static bool audio_ok, som_ligado = true, tela_cheia;
+
 /* ================================================================
  *  1. RECURSOS (tudo vem de assets_embutidos.h)
  * ================================================================ */
 static Font fTitulo, fTexto;
 static Texture2D spr_carta[9], spr_tomate, spr_logo, spr_mascote;   /* spr_carta[CARTA_CAIXA..CARTA_INTEIRA] */
+static Texture2D spr_fundo, spr_fundo_borrado;
+static Sound s_passar, s_clique, s_mover, s_pouso, s_iguais, s_pizza, s_nivel, s_fim;
+static Music musica;
 
 static Texture2D textura(const unsigned char *dados, int tam) {
     Image img = LoadImageFromMemory(".png", dados, tam);
@@ -116,6 +154,40 @@ static Font fonte(const unsigned char *dados, int tam, int tamanhoBase) {
     return f;
 }
 
+static Sound som(const unsigned char *dados, int tam, float volume) {
+    Wave w = LoadWaveFromMemory(".wav", dados, tam);
+    Sound s = LoadSoundFromWave(w);
+    UnloadWave(w);
+    SetSoundVolume(s, volume);
+    return s;
+}
+
+/* toca um efeito. tom: 1 = normal; maior = mais agudo (usado nas cascatas) */
+static void tocar(Sound s, float tom) {
+    if (!audio_ok) return;
+    SetSoundPitch(s, tom);
+    PlaySound(s);
+}
+
+/* liga o audio e carrega efeitos e musica. Se o computador nao tiver saida de som, o jogo segue mudo. */
+static void carregar_sons(void) {
+    InitAudioDevice();
+    audio_ok = IsAudioDeviceReady();
+    if (!audio_ok) { TraceLog(LOG_WARNING, "PIZZALIGN: sem dispositivo de audio, o jogo vai rodar sem som"); return; }
+    s_passar = som(SOM_PASSAR_WAV, SOM_PASSAR_WAV_TAM, 0.45f);
+    s_clique = som(SOM_CLIQUE_WAV, SOM_CLIQUE_WAV_TAM, 0.70f);
+    s_mover  = som(SOM_MOVER_WAV,  SOM_MOVER_WAV_TAM,  0.35f);
+    s_pouso  = som(SOM_POUSO_WAV,  SOM_POUSO_WAV_TAM,  0.80f);
+    s_iguais = som(SOM_IGUAIS_WAV, SOM_IGUAIS_WAV_TAM, 0.75f);
+    s_pizza  = som(SOM_PIZZA_WAV,  SOM_PIZZA_WAV_TAM,  0.85f);
+    s_nivel  = som(SOM_NIVEL_WAV,  SOM_NIVEL_WAV_TAM,  0.60f);
+    s_fim    = som(SOM_FIM_WAV,    SOM_FIM_WAV_TAM,    0.80f);
+    musica = LoadMusicStreamFromMemory(".ogg", MUSICA_OGG, MUSICA_OGG_TAM);
+    musica.looping = true;
+    SetMusicVolume(musica, 0.55f);                           /* fica ao fundo: os efeitos passam por cima */
+    PlayMusicStream(musica);
+}
+
 static void carregar_recursos(void) {
     spr_carta[CARTA_CAIXA]    = textura(CARTA_CAIXA_PNG, CARTA_CAIXA_PNG_TAM);
     spr_carta[CARTA_FATIA_E]  = textura(CARTA_FATIA_E_PNG, CARTA_FATIA_E_PNG_TAM);
@@ -128,6 +200,8 @@ static void carregar_recursos(void) {
     spr_tomate  = textura(TOMATE_PNG, TOMATE_PNG_TAM);
     spr_logo    = textura(LOGO_PNG, LOGO_PNG_TAM);
     spr_mascote = textura(MASCOTE_PNG, MASCOTE_PNG_TAM);
+    spr_fundo   = textura(FUNDO_PNG, FUNDO_PNG_TAM);
+    spr_fundo_borrado = textura(FUNDO_BORRADO_PNG, FUNDO_BORRADO_PNG_TAM);
     fTitulo = fonte(FONTE_TITULO_TTF, FONTE_TITULO_TTF_TAM, 104);
     fTexto  = fonte(FONTE_TEXTO_TTF, FONTE_TEXTO_TTF_TAM, 64);
 
@@ -140,8 +214,15 @@ static void carregar_recursos(void) {
 }
 
 static void liberar_recursos(void) {
+    if (audio_ok) {
+        UnloadSound(s_passar); UnloadSound(s_clique); UnloadSound(s_mover); UnloadSound(s_pouso);
+        UnloadSound(s_iguais); UnloadSound(s_pizza); UnloadSound(s_nivel); UnloadSound(s_fim);
+        UnloadMusicStream(musica);
+    }
+    CloseAudioDevice();
     for (int i = CARTA_CAIXA; i <= CARTA_INTEIRA; i++) UnloadTexture(spr_carta[i]);
     UnloadTexture(spr_tomate); UnloadTexture(spr_logo); UnloadTexture(spr_mascote);
+    UnloadTexture(spr_fundo); UnloadTexture(spr_fundo_borrado);
     if (fTitulo.texture.id != GetFontDefault().texture.id) UnloadFont(fTitulo);
     if (fTexto.texture.id != GetFontDefault().texture.id) UnloadFont(fTexto);
 }
@@ -168,7 +249,7 @@ static void texto_contornado(Font f, const char *t, float x, float cy, float tam
 
 /* escreve um paragrafo quebrando as linhas; devolve o y logo abaixo da ultima linha */
 static float paragrafo(const char *txt, float x, float y, float larg, float tam, Color cor) {
-    char linha[512] = "", palavra[64], teste[512];
+    char linha[512] = "", palavra[64], teste[600];
     float passo = tam * 0.90f;                               /* a Caveat ja tem bastante ar entre as linhas */
     const char *p = txt;
     while (*p) {
@@ -182,7 +263,7 @@ static float paragrafo(const char *txt, float x, float y, float larg, float tam,
             y += passo;
             snprintf(linha, sizeof linha, "%s", palavra);
         } else {
-            snprintf(linha, sizeof linha, "%s", teste);
+            snprintf(linha, sizeof linha, "%.500s", teste);
         }
     }
     if (linha[0]) { texto(fTexto, linha, x, y + passo / 2, tam, cor, -1); y += passo; }
@@ -205,15 +286,54 @@ static void caixa(Rectangle r, float raio, Color fundo, float espessura) {
     retangulo((Rectangle){r.x + TRACO, r.y + TRACO, r.width - 2 * TRACO, r.height - 2 * TRACO}, raio - TRACO, fundo);
 }
 
+/* mistura duas cores: t = 0 da a primeira, t = 1 da a segunda (usado nas animacoes dos botoes) */
+static Color mistura(Color a, Color b, float t) {
+    return (Color){(unsigned char)(a.r + (b.r - a.r) * t), (unsigned char)(a.g + (b.g - a.g) * t),
+                   (unsigned char)(a.b + (b.b - a.b) * t), (unsigned char)(a.a + (b.a - a.a) * t)};
+}
+
+/* animacao de um botao. v vai suave de 0 (parado) a 1 (em destaque); quando o destaque comeca,
+ * "tremor" dispara a mexidinha: um balanco rapido para os lados que some em 0,3 s. */
+typedef struct { float v, tremor; bool antes; } Anim;
+
+static float animar(Anim *a, bool destaque) {
+    float dt = GetFrameTime();
+    if (destaque && !a->antes) a->tremor = 0.30f;            /* acabou de entrar em destaque */
+    a->antes = destaque;
+    if (a->tremor > 0) a->tremor -= dt;
+    a->v += ((destaque ? 1.0f : 0.0f) - a->v) * fminf(1.0f, 14.0f * dt);
+    return a->v;
+}
+
+/* quanto o botao esta deslocado para o lado neste instante (a mexidinha) */
+static float mexida(const Anim *a) {
+    return (a->tremor > 0) ? sinf(a->tremor * 46.0f) * 4.5f * (a->tremor / 0.30f) : 0.0f;
+}
+
+/* avisa que a area r e clicavel: se o mouse estiver em cima, o cursor vira a maozinha. Devolve se esta em cima. */
+static bool em_cima(Rectangle r) {
+    bool sim = CheckCollisionPointRec(mouse, r);
+    if (sim) sobre_clicavel = true;
+    return sim;
+}
+
+/* a tecla foi apertada no teclado OU o botao dela foi clicado com o mouse? */
+static bool apertou(int t) { return IsKeyPressed(t) || tecla_virtual == t; }
+
+static float largura_tecla(const char *rotulo, float alt) {
+    bool seta = (rotulo[1] == '\0') && (rotulo[0] == '<' || rotulo[0] == '>' || rotulo[0] == 'v');
+    return seta ? alt : fmaxf(alt, mede(fTitulo, rotulo, alt * 0.96f) + alt * 0.62f);
+}
+
 /* desenha uma tecla do teclado e devolve a largura dela. "<" ">" "v" viram setas. */
-static float tecla(const char *rotulo, float x, float cy, float alt) {
+static float tecla_cor(const char *rotulo, float x, float cy, float alt, Color fundo) {
     bool seta = (rotulo[1] == '\0') && (rotulo[0] == '<' || rotulo[0] == '>' || rotulo[0] == 'v');
     float tam = alt * 0.96f;
-    float larg = seta ? alt : fmaxf(alt, mede(fTitulo, rotulo, tam) + alt * 0.62f);
+    float larg = largura_tecla(rotulo, alt);
     Rectangle r = {x, cy - alt / 2 - 1, larg, alt};
     retangulo((Rectangle){r.x, r.y + 3, r.width, r.height}, 7, TINTA);
     retangulo(r, 7, TINTA);
-    retangulo((Rectangle){r.x + 2, r.y + 2, r.width - 4, r.height - 4}, 5, PAPEL);
+    retangulo((Rectangle){r.x + 2, r.y + 2, r.width - 4, r.height - 4}, 5, fundo);
     if (seta) {
         float giro = (rotulo[0] == '>') ? 0 : (rotulo[0] == 'v') ? 90 : 180;
         DrawPoly((Vector2){r.x + r.width / 2, r.y + r.height / 2}, 3, alt * 0.27f, giro, TINTA);
@@ -223,24 +343,75 @@ static float tecla(const char *rotulo, float x, float cy, float alt) {
     return larg;
 }
 
-/* faixa de tinta no pe da tela com as teclas que valem agora */
+static float tecla(const char *rotulo, float x, float cy, float alt) { return tecla_cor(rotulo, x, cy, alt, PAPEL); }
+
+/* botoes pequenos do canto do rodape: 0 = som (N), 1 = tela cheia (F11) */
+static void botao_icone(float x, int tipo) {
+    static Anim anim[2];
+    Rectangle r = {x, RODAPE_Y + 9, 36, 36};
+    bool em = em_cima(r), apertado = em && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+    if (em && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) tecla_clicada = tipo ? KEY_F11 : KEY_N;
+    animar(&anim[tipo], em);
+    r.x += mexida(&anim[tipo]);
+    if (em && !apertado) r.y -= 3;                           /* levanta com o mouse em cima */
+    retangulo(r, 9, em ? QUEIJO : PAPEL);
+    float cx = r.x + 18, cy = r.y + 18;
+    if (tipo == 0) {                                         /* alto-falante; com um x quando o som esta desligado */
+        DrawRectangle((int)(cx - 11), (int)(cy - 4), 6, 8, TINTA);
+        DrawTriangle((Vector2){cx + 1, cy - 10}, (Vector2){cx - 9, cy}, (Vector2){cx + 1, cy + 10}, TINTA);
+        if (som_ligado) {
+            DrawRing((Vector2){cx + 1, cy}, 5.5f, 8.0f, -52, 52, 12, TINTA);
+            DrawRing((Vector2){cx + 1, cy}, 10.5f, 13.0f, -46, 46, 14, TINTA);
+        } else {
+            DrawLineEx((Vector2){cx + 5, cy - 5}, (Vector2){cx + 14, cy + 5}, 3, VERMELHO);
+            DrawLineEx((Vector2){cx + 5, cy + 5}, (Vector2){cx + 14, cy - 5}, 3, VERMELHO);
+        }
+    } else {                                                 /* quatro cantos: tela cheia */
+        float d = tela_cheia ? 4.0f : 10.0f;                 /* em tela cheia os cantos apontam para dentro */
+        for (int i = 0; i < 4; i++) {
+            float sx = (i % 2) ? 1.0f : -1.0f, sy = (i / 2) ? 1.0f : -1.0f;
+            float px = cx + sx * d, py = cy + sy * d;
+            float dir = tela_cheia ? 1.0f : -1.0f;           /* para que lado ficam os bracos do canto */
+            DrawRectangleRec((Rectangle){fminf(px, px + sx * dir * 7), py - 1.5f, 7, 3}, TINTA);
+            DrawRectangleRec((Rectangle){px - 1.5f, fminf(py, py + sy * dir * 7), 3, 7}, TINTA);
+        }
+    }
+}
+
+/* faixa de tinta no pe da tela com as teclas que valem agora. Cada dica tambem e um botao:
+ * com o mouse em cima ela acende, e o clique faz o mesmo que apertar a tecla. */
 static void desenhar_rodape(const Dica *dicas, int n) {
+    static Anim anim[4];
     const float alt = 30, entre = 30;
+    float x_icones = LARGURA - MARGEM - 36 - 44;             /* som e tela cheia ficam no canto direito */
     float total = 0;
     for (int i = 0; i < n; i++) {
-        total += fmaxf(alt, mede(fTitulo, dicas[i].tecla1, alt * 0.96f) + alt * 0.62f) + 8 + mede(fTexto, dicas[i].texto, T_PEQUENO);
-        if (dicas[i].tecla2) total += fmaxf(alt, mede(fTitulo, dicas[i].tecla2, alt * 0.96f) + alt * 0.62f) + 5;
+        total += largura_tecla(dicas[i].tecla1, alt) + 8 + mede(fTexto, dicas[i].texto, T_PEQUENO);
+        if (dicas[i].tecla2) total += largura_tecla(dicas[i].tecla2, alt) + 5;
         if (i < n - 1) total += entre;
     }
-    DrawRectangle(0, RODAPE_Y, LARGURA, RODAPE_A, TINTA);
-    float x = (LARGURA - total) / 2, cy = RODAPE_Y + RODAPE_A / 2.0f;
+    DrawRectangleRec((Rectangle){visivel.x, RODAPE_Y, visivel.width, visivel.y + visivel.height - RODAPE_Y}, TINTA);
+    float x = (MARGEM + x_icones - 12 - total) / 2, cy = RODAPE_Y + RODAPE_A / 2.0f;
     for (int i = 0; i < n; i++) {
-        x += tecla(dicas[i].tecla1, x, cy, alt);
-        if (dicas[i].tecla2) x += 5 + tecla(dicas[i].tecla2, x + 5, cy, alt);
+        float larg = largura_tecla(dicas[i].tecla1, alt) + 8 + mede(fTexto, dicas[i].texto, T_PEQUENO)
+                   + (dicas[i].tecla2 ? largura_tecla(dicas[i].tecla2, alt) + 5 : 0);
+        Rectangle area = {x - 9, RODAPE_Y + 5, larg + 18, RODAPE_A - 10};
+        bool em = dicas[i].tecla != 0 && em_cima(area);
+        bool apertado = em && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+        if (em && IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) tecla_clicada = dicas[i].tecla;
+        if (em) retangulo(area, 12, Fade(PAPEL, apertado ? 0.30f : 0.16f));
+        float sobe = (em && !apertado) ? 2.0f : 0.0f;        /* a tecla levanta com o mouse em cima */
+        Color fundo = em ? QUEIJO : PAPEL;
+        animar(&anim[i % 4], em);
+        float mx = mexida(&anim[i % 4]);                     /* e da a mexidinha */
+        x += tecla_cor(dicas[i].tecla1, x + mx, cy - sobe, alt, fundo);
+        if (dicas[i].tecla2) x += 5 + tecla_cor(dicas[i].tecla2, x + 5 + mx, cy - sobe, alt, fundo);
         x += 8;
-        texto(fTexto, dicas[i].texto, x, cy, T_PEQUENO, PAPEL, -1);
+        texto(fTexto, dicas[i].texto, x, cy, T_PEQUENO, em ? QUEIJO : PAPEL, -1);
         x += mede(fTexto, dicas[i].texto, T_PEQUENO) + entre;
     }
+    botao_icone(x_icones, 0);
+    botao_icone(x_icones + 44, 1);
 }
 
 /* sublinhado ondulado, como um risco de caneta */
@@ -288,16 +459,30 @@ static void desenhar_adesivo(Texture2D t, float cx, float cy, float larg, float 
     DrawTexturePro(t, src, (Rectangle){cx, cy, larg, alt}, centro, graus, WHITE);
 }
 
-/* toalha xadrez de cantina: faixas vermelhas transparentes na vertical e na horizontal.
- * Onde duas faixas se cruzam o vermelho soma e fica mais forte, igual ao tecido de verdade. */
+/* fundo de todas as telas: a foto da rua, ocupando a area do jogo.
+ * Se a janela for mais larga ou mais alta que o jogo (tela cheia), as sobras mostram a mesma foto
+ * borrada e escurecida, esticada ate cobrir tudo: nada fica preto e a atencao continua no meio. */
 static void desenhar_fundo(void) {
-    const int faixa = 40;
-    DrawRectangle(0, 0, LARGURA, ALTURA, TOALHA);
-    for (int x = 0; x < LARGURA; x += 2 * faixa) DrawRectangle(x, 0, faixa, ALTURA, Fade(VERMELHO, 0.21f));
-    for (int y = 0; y < ALTURA; y += 2 * faixa) DrawRectangle(0, y, LARGURA, faixa, Fade(VERMELHO, 0.21f));
-    DrawRectangleGradientV(0, 0, LARGURA, 260, Fade(TINTA, 0.20f), Fade(TINTA, 0.0f));          /* escurece as pontas: */
-    DrawRectangleGradientV(0, ALTURA - 320, LARGURA, 320, Fade(TINTA, 0.0f), Fade(TINTA, 0.26f)); /* o olho vai para o meio */
+    Rectangle v = visivel;
+    if (v.width > LARGURA + 1 || v.height > ALTURA + 1) {
+        float esc = fmaxf(v.width / LARGURA, v.height / ALTURA);
+        DrawTexturePro(spr_fundo_borrado, (Rectangle){0, 0, (float)spr_fundo_borrado.width, (float)spr_fundo_borrado.height},
+                       (Rectangle){LARGURA / 2.0f, ALTURA / 2.0f, LARGURA * esc, ALTURA * esc},
+                       (Vector2){LARGURA * esc / 2, ALTURA * esc / 2}, 0, WHITE);
+        DrawRectangleRec(v, Fade(TINTA, 0.50f));
+        DrawRectangle(-5, -5, LARGURA + 10, ALTURA + 10, Fade(TINTA, 0.55f));                  /* sombra em volta da foto */
+    }
+    /* a foto e um pouco mais "gorda" que a tela do jogo: recorta o que sobra para nao deformar */
+    float fl = (float)spr_fundo.width, fa = (float)spr_fundo.height;
+    float esc = fminf(fl / LARGURA, fa / ALTURA);
+    Rectangle recorte = {(fl - LARGURA * esc) / 2, (fa - ALTURA * esc) / 2, LARGURA * esc, ALTURA * esc};
+    DrawTexturePro(spr_fundo, recorte, (Rectangle){0, 0, LARGURA, ALTURA}, (Vector2){0, 0}, 0, WHITE);
+    DrawRectangle(0, 0, LARGURA, ALTURA, Fade(TINTA, 0.10f));                                  /* um tom abaixo: os paineis claros saltam */
+    DrawRectangleGradientV(0, ALTURA - 300, LARGURA, 300, Fade(TINTA, 0.0f), Fade(TINTA, 0.35f));
 }
+
+/* escurece tudo o que aparece (por tras da pausa e do fim de jogo) */
+static void escurecer(void) { DrawRectangleRec(visivel, Fade(TINTA, 0.60f)); }
 
 /* ================================================================
  *  4. TELAS
@@ -375,6 +560,10 @@ static void desenhar_lateral_esquerda(const EstadoJogo *jogo, int nivel) {
     desenhar_carta(CARTA_FATIA_D, c.x + 31, c.y + 90, 30, 1);
     texto(fTitulo, "+1", c.x + c.width - 12, c.y + 105, 38, TINTA, 1);
     texto(fTexto, "iguais", cx, c.y + 136, T_PEQUENO - 3, Fade(TINTA, 0.75f), 0);
+
+    Rectangle d = {MARGEM, c.y + c.height + 22, 100, 46};    /* a dificuldade desta partida */
+    caixa(d, 23, COR_DIF[dificuldade], 4);
+    texto(fTitulo, DIFICULDADES[dificuldade].nome, cx, d.y + d.height / 2 - 1, 32, dificuldade == 1 ? TINTA : PAPEL, 0);
 }
 
 /* lateral direita: as proximas cartas. A primeira (a proxima a cair) e maior e destacada. */
@@ -392,6 +581,12 @@ static void desenhar_proximas(const EstadoJogo *jogo) {
 
 /* "+3" com a pizza (completou) ou "+1" (iguais), subindo */
 static void desenhar_popup(const Popup *p) {
+    float nasceu = (1.4f - p->vida) / 0.45f;                 /* 0 a 1 no primeiro meio segundo */
+    if (nasceu < 1.0f) {                                     /* anel fino que abre e some: um "brilho" bem leve */
+        float raio = 26 + 58 * nasceu;
+        DrawRing((Vector2){p->ox + CARTA / 2.0f, p->oy + CARTA / 2.0f}, raio - 3.5f * (1 - nasceu), raio, 0, 360, 48,
+                 Fade(p->pizza ? QUEIJO : PAPEL, 0.85f * (1 - nasceu)));
+    }
     float a = fminf(1.0f, p->vida * 1.6f);
     float tam = 64 + 26 * fmaxf(0.0f, (p->vida - 1.25f) / 0.15f);            /* nasce maior e assenta */
     const char *t = TextFormat("+%d", p->pontos);
@@ -401,31 +596,74 @@ static void desenhar_popup(const Popup *p) {
     texto_contornado(fTitulo, t, x, cy, tam, p->pizza ? QUEIJO : PAPEL, a);
 }
 
-static Rectangle botao_menu(int i) { return (Rectangle){150, 584.0f + i * 100, 340, 78}; }
+static void desenhar_migalhas(const Partida *pa) {
+    for (int i = 0; i < MAX_MIGALHAS; i++) {
+        const Migalha *m = &pa->migalhas[i];
+        if (m->vida > 0) DrawCircleV((Vector2){m->x, m->y}, m->tam, Fade(m->cor, fminf(1.0f, m->vida * 3.0f)));
+    }
+}
+
+/* ---------- menu ----------
+ * Opcoes, de cima para baixo: 0 = Novo jogo | 1 = dificuldade (tres botoes lado a lado) | 2 = Como jogar.
+ * As tres linhas tem a mesma largura e a mesma altura. */
+static Rectangle botao_menu(int i)        { return (Rectangle){150, i == 0 ? 540.0f : 724.0f, 340, 72}; }   /* 0 = Novo jogo, 1 = Como jogar */
+static Rectangle botao_dificuldade(int d) { return (Rectangle){150 + d * 116.0f, 632, 108, 72}; }           /* 3 x 108 + 2 espacos de 8 = 340 */
+static Anim anim_menu[2], anim_dif[3];
+static bool foco_teclado = true;   /* true: a opcao em destaque e a escolhida no teclado; false: so a que esta sob o mouse */
+
+/* botao grande do menu: em destaque (teclado ou mouse em cima) ele sobe, alarga, ganha cor e da uma mexidinha; apertado, afunda */
+static void desenhar_botao(Rectangle b, const char *rotulo, bool destaque, Anim *anim) {
+    bool apertado = CheckCollisionPointRec(mouse, b) && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+    float a = animar(anim, destaque);
+    Rectangle r = {b.x - 6 * a + mexida(anim), apertado ? b.y + 6 : b.y - 5 * a, b.width + 12 * a, b.height};
+    caixa(r, 20, mistura(PAPEL, VERMELHO, a), apertado ? 2 : 6 + 5 * a);
+    texto(fTitulo, rotulo, r.x + r.width / 2, r.y + r.height / 2, T_BOTAO + 4 * a, mistura(TINTA, PAPEL, a), 0);
+}
+
+/* botao de dificuldade: fica na cor padrao e so ganha a cor dele (verde, amarelo queimado, vermelho) com o mouse
+ * em cima (no teclado, a dificuldade em uso acende quando a linha esta escolhida).
+ * A dificuldade em uso fica sempre afundada e sublinhada, para dar para ver qual esta valendo. */
+static void desenhar_dificuldade(int d, bool linha_em_foco) {
+    Rectangle b = botao_dificuldade(d);
+    bool em = CheckCollisionPointRec(mouse, b), apertado = em && IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+    bool escolhida = (d == dificuldade);
+    float a = animar(&anim_dif[d], em || (linha_em_foco && escolhida));
+    float afunda = apertado ? 6 : (escolhida ? 3 : 0);
+    Rectangle r = {b.x + mexida(&anim_dif[d]), b.y + afunda - 4 * a, b.width, b.height};
+    caixa(r, 18, mistura(PAPEL, COR_DIF[d], a), apertado ? 2 : (escolhida ? 3 : 6) + 4 * a);
+    Color cor = mistura(TINTA, d == 1 ? TINTA : PAPEL, a);
+    float cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+    texto(fTitulo, DIFICULDADES[d].nome, cx, cy - (escolhida ? 3 : 0), 40, cor, 0);
+    if (escolhida) rabisco(cx - 30, cy + 21, 60, cor);       /* risco de caneta embaixo da que esta valendo */
+}
 
 static void desenhar_menu(int opcao, const Recorde *recordes) {
     float t = (float)GetTime();
-    desenhar_adesivo(spr_logo, LARGURA / 2.0f, 292 + 4 * sinf(t * 1.6f), 372, -3 + 1.2f * sinf(t * 0.9f));
+    desenhar_adesivo(spr_logo, LARGURA / 2.0f, 276 + 4 * sinf(t * 1.6f), 356, -3 + 1.2f * sinf(t * 0.9f));
 
-    const char *nomes[2] = {"Novo jogo", "Como jogar"};
-    for (int i = 0; i < 2; i++) {
-        Rectangle b = botao_menu(i);
-        bool sel = (i == opcao);
-        if (sel) b.y -= 4;                                   /* o escolhido sobe e ganha cor */
-        caixa(b, 20, sel ? VERMELHO : PAPEL, sel ? 10 : 6);
-        texto(fTitulo, nomes[i], b.x + b.width / 2, b.y + b.height / 2, T_BOTAO, sel ? PAPEL : TINTA, 0);
-        if (sel) desenhar_carta(CARTA_FATIA_E, b.x - 92 + 5 * sinf(t * 5), b.y + b.height / 2 - 42, 84, 1);   /* fatia apontando */
-    }
+    /* com o teclado, o destaque e a opcao escolhida; com o mouse, so o botao que esta embaixo dele */
+    bool em_novo = CheckCollisionPointRec(mouse, botao_menu(0)), em_como = CheckCollisionPointRec(mouse, botao_menu(1));
+    desenhar_botao(botao_menu(0), "Novo jogo", foco_teclado ? opcao == 0 : em_novo, &anim_menu[0]);
+    desenhar_botao(botao_menu(1), "Como jogar", foco_teclado ? opcao == 2 : em_como, &anim_menu[1]);
+
+    for (int d = 0; d < 3; d++) desenhar_dificuldade(d, foco_teclado && opcao == 1);
+
+    Rectangle linha = {150, 632, 340, 72};                   /* a linha das dificuldades inteira */
+    Rectangle foco = (opcao == 0) ? botao_menu(0) : (opcao == 2) ? botao_menu(1) : linha;
+    if (foco_teclado || CheckCollisionPointRec(mouse, foco))                                /* fatia apontando a opcao */
+        desenhar_carta(CARTA_FATIA_E, foco.x - 96 + 5 * sinf(t * 5), foco.y + foco.height / 2 - 46, 84, 1);
 
     if (recordes) {                                          /* melhor placar salvo */
         const char *r = TextFormat("recorde: %s, %d pontos", recordes->nome, recordes->pontos);
         float larg = mede(fTexto, r, T_CORPO) + 52;
-        Rectangle e = {(LARGURA - larg) / 2, 806, larg, 46};
+        Rectangle e = {(LARGURA - larg) / 2, 842, larg, 46};
         caixa(e, 23, PAPEL, 4);
         texto(fTexto, r, LARGURA / 2.0f, e.y + e.height / 2, T_CORPO, TINTA, 0);
     }
 
-    Dica dicas[3] = {{"W", "S", "escolher"}, {"Enter", NULL, "confirmar"}, {"Q", NULL, "sair"}};
+    Dica escolher = {"W", "S", "escolher", 0}, sair = {"Q", NULL, "sair", KEY_Q};
+    Dica confirmar = {"Enter", NULL, "confirmar", KEY_ENTER}, mudar = {"A", "D", "mudar", 0};
+    Dica dicas[3] = {escolher, opcao == 1 ? mudar : confirmar, sair};
     desenhar_rodape(dicas, 3);
 }
 
@@ -476,12 +714,18 @@ static void desenhar_como_jogar(void) {
     texto(fTitulo, "Fique de olho", x, y + 30, T_SUB, TINTA, -1);
     y += 56;
     desenhar_carta(TOMATE, x, y + 2, 50, 1);
-    float yt = paragrafo("O tomate não combina com nada, só ocupa espaço. Ele aparece mais conforme os pontos sobem.",
+    float yt = paragrafo("O tomate não combina com nada, só ocupa espaço. A cada nível (10 pontos) ele aparece mais.",
                          x + 64, y, l - 64, T_CORPO, TINTA);
-    paragrafo("Depois de 30 pontos a queda acelera. Quando o topo enche, vence quem tiver mais pontos.",
-              x, fmaxf(yt, y + 56) + 8, l, T_CORPO, TINTA);
+    y = paragrafo("A queda acelera com os pontos; no Difícil, tudo vem mais cedo. Quando o topo enche, vence quem tiver mais pontos.",
+                  x, fmaxf(yt, y + 56) + 6, l, T_CORPO, TINTA);
+    float kx = x, ky = y + 24;                               /* atalhos que valem em qualquer tela */
+    kx += tecla("N", kx, ky, 28) + 7;
+    texto(fTexto, "liga ou desliga o som", kx, ky, T_PEQUENO, TINTA, -1);
+    kx += mede(fTexto, "liga ou desliga o som", T_PEQUENO) + 22;
+    kx += tecla("F11", kx, ky, 28) + 7;
+    texto(fTexto, "tela cheia", kx, ky, T_PEQUENO, TINTA, -1);
 
-    Dica dicas[1] = {{"Enter", NULL, "voltar ao menu"}};
+    Dica dicas[1] = {{"Enter", NULL, "voltar ao menu", KEY_ENTER}};
     desenhar_rodape(dicas, 1);
 }
 
@@ -491,19 +735,19 @@ static int vencedor(const Partida *pa) {
 }
 
 static void desenhar_pausa(void) {
-    DrawRectangle(0, 0, LARGURA, ALTURA, Fade(TINTA, 0.60f));
+    escurecer();
     Rectangle p = {140, 380, 360, 168};
     caixa(p, 22, PAPEL, 8);
     texto(fTitulo, "Pausado", LARGURA / 2.0f, p.y + 62, T_TITULO, TINTA, 0);
     texto(fTexto, "o forno espera por vocês", LARGURA / 2.0f, p.y + 122, T_CORPO, Fade(TINTA, 0.75f), 0);
-    Dica dicas[3] = {{"P", NULL, "continuar"}, {"M", NULL, "menu"}, {"Q", NULL, "sair"}};
+    Dica dicas[3] = {{"P", NULL, "continuar", KEY_P}, {"M", NULL, "menu", KEY_M}, {"Q", NULL, "sair", KEY_Q}};
     desenhar_rodape(dicas, 3);
 }
 
 static void desenhar_fim(const Recorde *recordes, const Partida *pa) {
     int v = vencedor(pa);
     float cx = LARGURA / 2.0f;
-    DrawRectangle(0, 0, LARGURA, ALTURA, Fade(TINTA, 0.60f));
+    escurecer();
     int linhas = 0;                                          /* quantas linhas do ranking vao aparecer (ate 5) */
     for (const Recorde *r = recordes; r && linhas < 5; r = r->prox) linhas++;
     Rectangle p = {60, 0, 520, pa->salvo ? 356.0f + linhas * 50 : 468.0f};
@@ -535,7 +779,7 @@ static void desenhar_fim(const Recorde *recordes, const Partida *pa) {
         if (((int)(GetTime() * 2)) % 2 == 0)                 /* cursor piscando */
             DrawRectangleRounded((Rectangle){campo.x + 24 + mede(fTitulo, pa->nome, 48), cyc - 18, 4, 36}, 1, 4, VERMELHO);
         texto(fTexto, TextFormat("até %d letras ou números", TAM_NOME_DIGITADO), x, p.y + 418, T_PEQUENO, Fade(TINTA, 0.7f), -1);
-        Dica dicas[1] = {{"Enter", NULL, "salvar"}};
+        Dica dicas[1] = {{"Enter", NULL, "salvar", KEY_ENTER}};
         desenhar_rodape(dicas, 1);
     } else {
         texto(fTitulo, "Ranking", x, p.y + 298, T_SUB, TINTA, -1);
@@ -549,7 +793,7 @@ static void desenhar_fim(const Recorde *recordes, const Partida *pa) {
             texto(fTexto, r->nome, x + 44, cyl, 32, TINTA, -1);
             texto(fTitulo, TextFormat("%d", r->pontos), x + l - 4, cyl, 38, TINTA, 1);
         }
-        Dica dicas[3] = {{"R", NULL, "jogar de novo"}, {"M", NULL, "menu"}, {"Q", NULL, "sair"}};
+        Dica dicas[3] = {{"R", NULL, "jogar de novo", KEY_R}, {"M", NULL, "menu", KEY_M}, {"Q", NULL, "sair", KEY_Q}};
         desenhar_rodape(dicas, 3);
     }
 }
@@ -563,22 +807,41 @@ static void nova_partida(Partida *p, EstadoJogo *jogo) {
     p->dispX = (float)jogo->fatiaAtual.x;
 }
 
-/* ate 30 pontos a queda e fixa (0,55 s por linha); depois fica um pouquinho mais rapida a cada ponto */
+/* a queda comeca na velocidade da dificuldade e, depois de certos pontos, fica um pouquinho mais rapida a cada ponto */
 static float intervalo_de_queda(int pontos) {
-    float t = 0.55f;
-    if (pontos > 30) t -= 0.004f * (pontos - 30);
-    return t < 0.18f ? 0.18f : t;
+    const Dificuldade *d = &DIFICULDADES[dificuldade];
+    float t = d->queda;
+    if (pontos > d->acelera_apos) t -= d->acelera * (pontos - d->acelera_apos);
+    return t < d->queda_min ? d->queda_min : t;
 }
 
-/* tomates: o motor so cria cartas de 1 a 5, entao trocamos a ultima da fila (a recem-criada) por um tomate.
- * Eles so aparecem depois de 10 pontos e vao ficando mais comuns (no maximo 20%). */
+/* chance (em %) de a proxima carta ser um tomate: cresce a cada nivel, no ritmo da dificuldade */
+static int chance_de_tomate(int pontos) {
+    const Dificuldade *d = &DIFICULDADES[dificuldade];
+    int nivel = pontos / 10 + 1;
+    if (nivel < d->tomate_nivel) return 0;
+    int chance = d->tomate_inicio + d->tomate_por_nivel * (nivel - d->tomate_nivel);
+    return chance > d->tomate_max ? d->tomate_max : chance;
+}
+
+/* tomates: o motor so cria cartas de 1 a 5, entao trocamos a ultima da fila (a recem-criada) por um tomate */
 static void sortear_tomate(EstadoJogo *jogo) {
-    int chance = (jogo->pontuacao < 10) ? 0 : 2 + 2 * (jogo->pontuacao / 10);
-    if (chance > 20) chance = 20;
-    if (rand() % 100 >= chance) return;
+    if (rand() % 100 >= chance_de_tomate(jogo->pontuacao)) return;
     NoFatia *n = jogo->filaFatias;
     while (n && n->proximo) n = n->proximo;
     if (n) n->pedacos = TOMATE;
+}
+
+/* solta farelos coloridos a partir do ponto (x, y) */
+static void soltar_migalhas(Partida *pa, float x, float y, int quantas) {
+    const Color cores[4] = {QUEIJO, COR(214, 140, 58), VERMELHO, VERDE};       /* queijo, borda, molho, manjericao */
+    for (int k = 0; k < MAX_MIGALHAS && quantas > 0; k++) {
+        if (pa->migalhas[k].vida > 0) continue;
+        float ang = (float)(rand() % 628) / 100.0f, forca = 70.0f + rand() % 170;
+        pa->migalhas[k] = (Migalha){x, y, cosf(ang) * forca, sinf(ang) * forca - 110.0f,
+                                    0.45f + (rand() % 40) / 100.0f, 2.5f + (rand() % 30) / 10.0f, cores[rand() % 4]};
+        quantas--;
+    }
 }
 
 /* mostra os efeitos dos pares que pontuaram na ultima carta que pousou */
@@ -593,17 +856,29 @@ static void registrar_efeitos(Partida *pa, const EstadoJogo *jogo) {
             if (pa->fantasmas[k].vida <= 0) { pa->fantasmas[k] = (Fantasma){x2, y2, VIDA_FANTASMA, p->valor2}; break; }
         for (int k = 0; k < MAX_PARES; k++)
             if (pa->popups[k].vida <= 0) {
-                pa->popups[k] = (Popup){p->pontos, p->pontos == PONTOS_PIZZA, (x1 + x2) / 2, (y1 + y2) / 2, 1.4f};
+                pa->popups[k] = (Popup){p->pontos, p->pontos == PONTOS_PIZZA, (x1 + x2) / 2, (y1 + y2) / 2, 1.4f,
+                                        (x1 + x2) / 2, (y1 + y2) / 2};
                 break;
             }
+        soltar_migalhas(pa, (x1 + x2) / 2 + CARTA / 2.0f, (y1 + y2) / 2 + CARTA / 2.0f, p->pontos == PONTOS_PIZZA ? 18 : 9);
     }
 }
 
 /* uma descida. Quando a carta pousa: o motor pontua, o ponto vai para quem jogou e passa a vez */
 static void avancar(Partida *pa, EstadoJogo *jogo) {
-    int antes = jogo->pecasFixadas;
+    int antes = jogo->pecasFixadas, nivel_antes = jogo->pontuacao / 10;
     descer_peca(jogo);
     if (jogo->pecasFixadas == antes) return;                 /* so desceu uma linha */
+
+    /* sons: a batida do pouso e, se pontuou, o som da fusao (mais agudo a cada par da cascata) */
+    float tom = 1.0f + 0.07f * (jogo->numPares > 1 ? jogo->numPares - 1 : 0);
+    bool fez_pizza = false;
+    for (int i = 0; i < jogo->numPares; i++) if (jogo->pares[i].pontos == PONTOS_PIZZA) fez_pizza = true;
+    tocar(s_pouso, 1.0f);
+    if (fez_pizza) tocar(s_pizza, tom);
+    else if (jogo->ganhoUltima > 0) tocar(s_iguais, tom);
+    if (jogo->gameOver) tocar(s_fim, 1.0f);
+    else if (jogo->pontuacao / 10 > nivel_antes) tocar(s_nivel, 1.0f);
 
     pa->pontos[pa->vez] += jogo->ganhoUltima;
     registrar_efeitos(pa, jogo);
@@ -622,13 +897,15 @@ static bool tecla_com_repeticao(int tecla, float *t, float dt) {
 }
 
 static void atualizar_partida(Partida *pa, EstadoJogo *jogo, float dt, float intervalo) {
-    if (IsKeyPressed(KEY_P)) pa->pausado = !pa->pausado;
+    if (apertou(KEY_P)) { pa->pausado = !pa->pausado; tocar(s_clique, 1.0f); }
     if (pa->pausado) return;
 
     /* so as teclas de quem esta na vez valem: J1 = A D S, J2 = as tres setas */
     int kEsq = pa->vez ? KEY_LEFT : KEY_A, kDir = pa->vez ? KEY_RIGHT : KEY_D, kBaixo = pa->vez ? KEY_DOWN : KEY_S;
+    int coluna = jogo->fatiaAtual.x;
     if (tecla_com_repeticao(kEsq, &pa->tEsq, dt)) mover_peca(jogo, -1, 0);
     if (tecla_com_repeticao(kDir, &pa->tDir, dt)) mover_peca(jogo, 1, 0);
+    if (jogo->fatiaAtual.x != coluna) tocar(s_mover, 1.0f);  /* so toca se a carta saiu do lugar */
 
     pa->tempo += dt;
     float passo = IsKeyDown(kBaixo) ? fminf(intervalo, 0.05f) : intervalo;
@@ -643,7 +920,8 @@ static void atualizar_nome(Partida *pa, Recorde **recordes) {
             pa->nome[pa->tamNome] = '\0';
         }
     if (IsKeyPressed(KEY_BACKSPACE) && pa->tamNome > 0) pa->nome[--pa->tamNome] = '\0';
-    if (IsKeyPressed(KEY_ENTER)) {
+    if (apertou(KEY_ENTER)) {
+        tocar(s_clique, 1.0f);
         int v = vencedor(pa), pts = (v < 1) ? pa->pontos[0] : pa->pontos[1];   /* empate: os dois valem o mesmo */
         recorde_inserir(recordes, pa->tamNome ? pa->nome : "JOGADOR", pts);
         recordes_salvar(*recordes, ARQUIVO_RECORDES);
@@ -654,13 +932,73 @@ static void atualizar_nome(Partida *pa, Recorde **recordes) {
 /* ================================================================
  *  6. MAIN
  * ================================================================ */
-/* a janela e vertical e pode ter qualquer tamanho: o jogo escala tudo mantendo a proporcao */
+/* a janela pode ter qualquer tamanho: o jogo escala tudo mantendo a proporcao.
+ * Tambem atualiza "visivel" (o que aparece na janela) e "mouse" (nas medidas do jogo). */
 static Camera2D camera_ajustada(void) {
     float z = fminf((float)GetScreenWidth() / LARGURA, (float)GetScreenHeight() / ALTURA);
     Camera2D c = {0};
     c.zoom = z;
     c.offset = (Vector2){(GetScreenWidth() - LARGURA * z) / 2, (GetScreenHeight() - ALTURA * z) / 2};
+    visivel = (Rectangle){-c.offset.x / z, -c.offset.y / z, GetScreenWidth() / z, GetScreenHeight() / z};
+    mouse = GetScreenToWorld2D(GetMousePosition(), c);
     return c;
+}
+
+/* F11: alterna entre janela e tela cheia (sem borda, do tamanho do monitor) */
+static void alternar_tela_cheia(void) {
+#if defined(RAYLIB_VERSION_MAJOR) && RAYLIB_VERSION_MAJOR >= 5
+    ToggleBorderlessWindowed();
+#else                                              /* raylib antiga: tela cheia tradicional */
+    static int larg_janela, alt_janela;
+    if (!IsWindowFullscreen()) {
+        larg_janela = GetScreenWidth(); alt_janela = GetScreenHeight();
+        int mon = GetCurrentMonitor();
+        SetWindowSize(GetMonitorWidth(mon), GetMonitorHeight(mon));
+        ToggleFullscreen();
+    } else {
+        ToggleFullscreen();
+        SetWindowSize(larg_janela, alt_janela);
+    }
+#endif
+    tela_cheia = !tela_cheia;
+}
+
+/* menu: teclado e mouse escolhem a mesma coisa. Devolve a tela para onde ir. */
+static Tela atualizar_menu(int *opcao, Partida *pa, EstadoJogo *jogo) {
+    int opcao_antes = *opcao, dif_antes = dificuldade, ativar = -1;
+    Vector2 mv = GetMouseDelta();
+    bool moveu = (mv.x != 0 || mv.y != 0), soltou = IsMouseButtonReleased(MOUSE_BUTTON_LEFT);
+
+    if (GetKeyPressed() != 0) foco_teclado = true;           /* quem mexeu por ultimo manda no destaque */
+    if (moveu && GetTime() > 0.5) foco_teclado = false;      /* (ignora o "movimento" do mouse quando a janela abre) */
+    if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) *opcao = (*opcao + 1) % 3;
+    if (IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) *opcao = (*opcao + 2) % 3;
+
+    for (int i = 0; i < 2; i++)                              /* os dois botoes grandes */
+        if (em_cima(botao_menu(i))) {
+            if (moveu) *opcao = i * 2;
+            if (soltou) { *opcao = i * 2; ativar = i * 2; }
+        }
+    for (int d = 0; d < 3; d++)                              /* as tres dificuldades */
+        if (em_cima(botao_dificuldade(d))) {
+            if (moveu) *opcao = 1;
+            if (soltou) { *opcao = 1; dificuldade = d; }
+        }
+
+    if (*opcao == 1) {                                       /* com o teclado: A / D (ou setas) mudam, Enter passa para a proxima */
+        if ((IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A)) && dificuldade > 0) dificuldade--;
+        if ((IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D)) && dificuldade < 2) dificuldade++;
+        if (apertou(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) dificuldade = (dificuldade + 1) % 3;
+    } else if (apertou(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
+        ativar = *opcao;
+    }
+
+    if (*opcao != opcao_antes) tocar(s_passar, 1.0f);
+    if (dificuldade != dif_antes) tocar(s_clique, 0.9f + 0.15f * dificuldade);
+    if (ativar >= 0) tocar(s_clique, 1.0f);
+    if (ativar == 0) { nova_partida(pa, jogo); return TELA_JOGO; }
+    if (ativar == 2) return TELA_COMO;
+    return TELA_MENU;
 }
 
 int main(void) {
@@ -681,6 +1019,7 @@ int main(void) {
     SetWindowMinSize(LARGURA / 2, ALTURA / 2);
 
     carregar_recursos();
+    carregar_sons();
 
     EstadoJogo *jogo = estado_criar();
     if (!jogo) return 1;
@@ -690,7 +1029,7 @@ int main(void) {
 
     Tela tela = TELA_MENU;
     int opcao = 0;
-    bool sair = false;
+    bool sair = false, cursor_mao = false;
 
     while (!sair && !WindowShouldClose()) {
         float dt = GetFrameTime();
@@ -699,29 +1038,33 @@ int main(void) {
         int nivel = jogo->pontuacao / 10 + 1;
         float intervalo = intervalo_de_queda(jogo->pontuacao);
 
-        if (IsKeyPressed(KEY_Q) && !digitando) sair = true;
+        tecla_virtual = tecla_clicada;             /* o botao clicado no quadro passado vale como tecla agora */
+        tecla_clicada = 0;
+        sobre_clicavel = false;
+        if (tecla_virtual != 0) tocar(s_clique, 1.0f);
+        if (audio_ok) UpdateMusicStream(musica);   /* a musica precisa ser alimentada todo quadro */
+
+        /* ----- teclas que valem em qualquer tela (as letras nao valem enquanto se digita o nome) ----- */
+        if ((IsKeyPressed(KEY_Q) && !digitando) || tecla_virtual == KEY_Q) sair = true;
+        if ((IsKeyPressed(KEY_N) && !digitando) || tecla_virtual == KEY_N) {
+            som_ligado = !som_ligado;
+            SetMasterVolume(som_ligado ? 1.0f : 0.0f);
+        }
+        if (apertou(KEY_F11)) alternar_tela_cheia();
 
         /* ----- atualizar ----- */
         if (tela == TELA_MENU) {
-            if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S) || IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) opcao = 1 - opcao;
-            Vector2 m = GetScreenToWorld2D(GetMousePosition(), cam), mv = GetMouseDelta();
-            bool clicou = false;
-            for (int i = 0; i < 2; i++)
-                if (CheckCollisionPointRec(m, botao_menu(i))) {
-                    if (mv.x != 0 || mv.y != 0) opcao = i;
-                    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) { opcao = i; clicou = true; }
-                }
-            if (clicou || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
-                if (opcao == 0) { nova_partida(&pa, jogo); tela = TELA_JOGO; }
-                else tela = TELA_COMO;
-            }
+            tela = atualizar_menu(&opcao, &pa, jogo);
         } else if (tela == TELA_COMO) {
-            if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_M) || IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_SPACE)) tela = TELA_MENU;
+            if (apertou(KEY_ENTER) || IsKeyPressed(KEY_M) || IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_SPACE)) {
+                tocar(s_clique, 1.0f);
+                tela = TELA_MENU;
+            }
         } else {
-            if (IsKeyPressed(KEY_M) && !digitando) tela = TELA_MENU;
+            if ((IsKeyPressed(KEY_M) && !digitando) || tecla_virtual == KEY_M) tela = TELA_MENU;
             else if (!jogo->gameOver) atualizar_partida(&pa, jogo, dt, intervalo);
             else if (digitando) atualizar_nome(&pa, &recordes);
-            else if (IsKeyPressed(KEY_R)) nova_partida(&pa, jogo);
+            else if (apertou(KEY_R)) nova_partida(&pa, jogo);
 
             /* animacao suave da carta (so visual; a posicao real e a do motor) */
             pa.dispX += ((float)jogo->fatiaAtual.x - pa.dispX) * fminf(1.0f, 20.0f * dt);
@@ -732,6 +1075,14 @@ int main(void) {
             for (int i = 0; i < 2 * MAX_PARES; i++) if (pa.fantasmas[i].vida > 0) pa.fantasmas[i].vida -= dt;
             for (int i = 0; i < MAX_PARES; i++)
                 if (pa.popups[i].vida > 0) { pa.popups[i].vida -= dt; pa.popups[i].y -= 40 * dt; }
+            for (int i = 0; i < MAX_MIGALHAS; i++) {                         /* farelos: voam, caem e somem */
+                Migalha *m = &pa.migalhas[i];
+                if (m->vida <= 0) continue;
+                m->vida -= dt;
+                m->vy += 520.0f * dt;                                        /* gravidade */
+                m->x += m->vx * dt;
+                m->y += m->vy * dt;
+            }
         }
 
         /* ----- desenhar ----- */
@@ -756,17 +1107,23 @@ int main(void) {
                     float t = pa.fantasmas[i].vida / VIDA_FANTASMA, tam = CARTA * (1 + (1 - t) * 0.35f);
                     desenhar_carta(pa.fantasmas[i].valor, pa.fantasmas[i].x - (tam - CARTA) / 2, pa.fantasmas[i].y - (tam - CARTA) / 2, tam, t);
                 }
+            desenhar_migalhas(&pa);
             for (int i = 0; i < MAX_PARES; i++) if (pa.popups[i].vida > 0) desenhar_popup(&pa.popups[i]);
 
             if (jogo->gameOver) desenhar_fim(recordes, &pa);
             else if (pa.pausado) desenhar_pausa();
             else {
-                Dica dicas[3] = {{"P", NULL, "pausa"}, {"M", NULL, "menu"}, {"Q", NULL, "sair"}};
+                Dica dicas[3] = {{"P", NULL, "pausa", KEY_P}, {"M", NULL, "menu", KEY_M}, {"Q", NULL, "sair", KEY_Q}};
                 desenhar_rodape(dicas, 3);
             }
         }
         EndMode2D();
         EndDrawing();
+
+        if (sobre_clicavel != cursor_mao) {        /* maozinha em cima de botao, seta no resto */
+            cursor_mao = sobre_clicavel;
+            SetMouseCursor(cursor_mao ? MOUSE_CURSOR_POINTING_HAND : MOUSE_CURSOR_DEFAULT);
+        }
     }
 
     recordes_liberar(recordes);
