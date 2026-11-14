@@ -79,11 +79,11 @@ pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-make mingw-w64-x86_64-raylib
 **Clonar o repositório:**
 ```bash
 git clone https://github.com/thelimacosta/pizzalign.git
-cd pizzalign
+cd pizzalign/jogo
 ```
 
 **Compilar o projeto:**
-Utilize o `Makefile` incluído na raiz do projeto:
+Utilize o `Makefile` incluído na pasta jogo:
 ```bash
 make
 ```
@@ -103,8 +103,7 @@ Após a compilação, execute o binário gerado (`pizzalign.exe` no Windows):
 
 ## Créditos
 
-- Fonte **Redaction 35** © MCKL Inc. (licença em `LICENCA-fonte-Redaction.txt`).
-- Foto de fundo: Rito Margolis.
+- Fonte **Caveat (Google fonts)** © MCKL Inc. (licença em `jogo/LICENCA-fonte-Caveat.txt`).
 
 ## Equipe
 
