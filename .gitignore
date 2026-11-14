@@ -1,4 +1,3 @@
-pizzalign
-pizzalign.exe
+*.exe
 recordes.txt
-*.o
+__pycache__/
