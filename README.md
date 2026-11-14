@@ -84,12 +84,6 @@ Os pontos vão para o jogador que soltou a carta.
 | `R` | Jogar de novo (na tela de fim de jogo) |
 | `W` / `S` ou `↑` / `↓`, `Enter` | Navegar e confirmar no menu (o mouse também funciona) |
 
-<p align="center">
-  <img src="docs/como-jogar.png" alt="Tela Como jogar" height="420">
-  &nbsp;
-  <img src="docs/fim-de-jogo.png" alt="Tela de fim de jogo" height="420">
-</p>
-
 ## Como executar
 
 O jogo roda em Windows, Linux e macOS. Ao executar, uma janela gráfica é aberta.
